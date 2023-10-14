@@ -1,0 +1,27 @@
+---
+title: "DATA624 - Project1"
+author: "Glen Dale Davis"
+date: "2023-10-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Packages:
+
+```{r packages, warning = FALSE, message = FALSE}
+library(fpp3)
+library(RColorBrewer)
+library(knitr)
+library(pracma)
+library(cowplot)
+
+```
+
+## Part A:
+
+## Part B:
+
+## Part C:
