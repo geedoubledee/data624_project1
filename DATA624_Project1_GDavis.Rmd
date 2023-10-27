@@ -2,7 +2,9 @@
 title: "DATA624 - Project1"
 author: "Glen Dale Davis"
 date: "2023-10-14"
-output: html_document
+output:
+  html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -17,11 +19,524 @@ library(RColorBrewer)
 library(knitr)
 library(pracma)
 library(cowplot)
+library(readxl)
+library(httr)
 
 ```
 
 ## Part A:
 
+### Data Preparation:
+
+We load transaction data for four ATMS from May 2009 to April 2010.
+
+```{r part_a1, warning = FALSE, message = FALSE}
+my_url <- "https://github.com/geedoubledee/data624_project1/raw/main/ATM624Data.xlsx"
+col_types <- c("date", "text", "numeric")
+temp <- tempfile(fileext = ".xlsx")
+req <- GET(my_url, authenticate(Sys.getenv("GITHUB_PAT"), ""),
+           write_disk(path = temp))
+atm <- readxl::read_excel(temp, col_types = col_types)
+
+```
+
+We coerce the `DATE` variable to class *Date* and the `ATM` variable to class *Factor*. We remove observations that contain neither `ATM` nor `CASH` data. (These empty observations all occur during the period we will be forecasting for: May 2010.)
+
+```{r part_a2}
+levels = c("ATM1", "ATM2", "ATM3", "ATM4")
+atm <- atm |>
+    mutate(DATE = as.Date(DATE),
+           ATM = factor(ATM, levels = levels, ordered = TRUE)) |>
+    filter(!is.na(ATM))
+
+```
+
+We create and plot the time series with subplots for each ATM, and we print a summary of $0$ or `NA` values for each ATM.
+
+```{r part_a3, warning = FALSE, message = FALSE}
+theme_set(theme_classic())
+palette <- brewer.pal(n = 8, name = "Dark2")
+atm_colors <- palette[1:4]
+names(atm_colors) <- levels
+atm_ts <- atm |>
+    as_tsibble(index = DATE, key = ATM)
+p1 <- atm_ts |>
+    autoplot(Cash) +
+    facet_wrap(~ ATM, scales = "free_y" , ncol = 1) +
+    scale_color_brewer(palette = "Dark2") +
+    theme(legend.position = "none") +
+    labs(title = "ATM Transaction Data from May 2009-April 2010 for Four ATMs")
+p1
+
+```
+
+```{r part_a4}
+na_summary <- atm_ts |>
+    as_tibble() |>
+    filter(is.na(Cash) | Cash == 0) |>
+    group_by(ATM, Cash) |>
+    summarize(Count = n())
+knitr::kable(na_summary)
+
+```
+
+We can immediately see missing value and outlier issues with the data that we will need to address. First, we will handle ATM3's data issues, as those need to be addressed differently from the other ATMs' data issues.
+
+The distribution of `Cash` is degenerate for ATM3, as $99\%$ of values are $0$. The most likely interpretation of these values is that the machine was not operating during the period prior to the first non-zero recorded value. Since we will be forecasting for each ATM separately, and we therefore cannot exclude ATM3 from our analysis, we will treat these $0$ values as missing and use Next Observation Carried Backward (NOCB) to fill them. (This technique is the same as Last Observation Carried Forward (LOCF), except it is performed in the opposite direction.)
+
+```{r part_a6}
+atm3 <- atm_ts |>
+    filter(ATM == "ATM3")
+atm3$Cash[atm3$Cash == 0] <- NA
+atm3 <- atm3 |>
+    fill(Cash, .direction = "up")
+atm_ts <- atm_ts|>
+    filter(ATM != "ATM3") |>
+    bind_rows(atm3)
+
+```
+
+Next we take a closer look at ATMs 1, 2, and 4.
+
+Since ATMs 1 and 2 have both $0$ and `NA` values, the `NA` values will first be converted to $0$ values. It is reasonable that these observations correctly indicate that no transactions occurred at these ATMs on those days.
+
+```{r part_a7, warning = FALSE, message = FALSE}
+atm_ts_na <- atm_ts |>
+    filter(is.na(Cash)) |>
+    mutate(Cash = 0)
+atm_ts <- atm_ts|>
+    filter(!is.na(Cash)) |>
+    bind_rows(atm_ts_na)
+p2a <- atm_ts |>
+    filter(ATM != "ATM3") |>
+    ggplot(aes(x = Cash, fill = ATM)) +
+    geom_histogram(binwidth = 10) + 
+    facet_wrap(~ ATM, scales = "free_x") +
+    scale_fill_manual(values = atm_colors) + 
+    theme(legend.position = "top",
+          strip.background = element_blank(),
+          strip.text.x = element_blank()) +
+    labs(title = "Histograms of Cash per ATM",
+         y = "Count")
+p2b <- atm_ts |>
+    filter(ATM != "ATM3") |>
+    ggplot(aes(x=Cash, y=ATM, fill=ATM)) + 
+    geom_boxplot() +
+    facet_grid(~ ATM, scales = "free_x") + 
+    labs(title="Boxplots of Cash per ATM",x="Cash (Hundreds of $)", y = "ATM") +
+    scale_fill_manual(values = atm_colors) +
+    theme(strip.background = element_blank(),
+          strip.text.x = element_blank(),
+          legend.position = "none")
+p2 <- plot_grid(p2a, p2b, ncol = 1, align = "v", axis = "l")
+p2
+
+```
+
+One `Cash` value is over $6$ times larger than any other value for ATM4 or any other ATM in this dataset. Our understanding is that ATMs operated in retail locations (i.e. gas stations or hotels) typically hold a max of $\$20,000$, and ATMs operated in banks can hold up to $\$200,000$. We will replace this extreme value and other outliers for ATMs 1, 2, and 4 in the dataset by [winsorizing](https://towardsdatascience.com/detecting-and-treating-outliers-in-python-part-3-dcb54abaf7b0) them. By winsorizing, we replace any value of a variable above or below percentile $k$ with the value of the $k^{th}$ percentile itself. A k of 5 is standard, so we will replace outliers below the 5th percentile with the value of the 5th percentile, and we will replace outliers above the 95th percentile with the value of the 95th percentile.
+
+```{r parta_8}
+atm3 <- atm_ts |>
+    filter(ATM == "ATM3")
+atm_ts <- atm_ts |>
+    filter(ATM != "ATM3") |>
+    group_by(ATM) |>
+    mutate(Cash = case_when(
+        Cash > quantile(Cash, probs = 0.95) ~ quantile(Cash, probs = 0.95),
+        Cash < quantile(Cash, probs = 0.05) ~ quantile(Cash, probs = 0.05),
+        TRUE ~ Cash)) |>
+    bind_rows(atm3)
+
+```
+
+Now we can confirm whether the outliers in the distributions for ATMS 1, 2, and 4 have been removed.
+
+```{r parta_10}
+p3a <- atm_ts |>
+    filter(ATM != "ATM3") |>
+    ggplot(aes(x = Cash, fill = ATM)) +
+    geom_histogram(binwidth = 10) + 
+    facet_wrap(~ ATM, scales = "free_x") +
+    scale_fill_manual(values = atm_colors) + 
+    theme(legend.position = "top",
+          strip.background = element_blank(),
+          strip.text.x = element_blank()) +
+    labs(title = "Histograms of Cash per ATM",
+         y = "Count")
+p3b <- atm_ts |>
+    filter(ATM != "ATM3") |>
+    ggplot(aes(x=Cash, y=ATM, fill=ATM)) + 
+    geom_boxplot() +
+    facet_grid(~ ATM, scales = "free_x") + 
+    labs(title="Boxplots of Cash per ATM",
+         x="Cash (Hundreds of $)",
+         y = "ATM") +
+    scale_fill_manual(values = atm_colors) +
+    theme(strip.background = element_blank(),
+          strip.text.x = element_blank(),
+          legend.position = "none")
+p3 <- plot_grid(p3a, p3b, ncol = 1, align = "v", axis = "l")
+p3
+
+```
+
+There are no longer any data points considered outliers for ATMs 2 and 4 after replacement. ATM1 still contains data points considered outliers on the low end after replacement. This can happen in bimodal distributions, but we have still reduced the weight of all outliers without eliminating them. We will proceed.
+
+First, we plot the adjusted time series.
+
+```{r part_a11}
+p5 <- atm_ts |>
+    autoplot(Cash) +
+    facet_wrap(~ ATM, scales = "free_y" , ncol = 1) +
+    scale_color_brewer(palette = "Dark2") +
+    theme(legend.position = "none") +
+    labs(title = "ATM Transaction Data from May 2009-April 2010 for Four ATMs",
+         subtitle = "Adjusted for Outliers and Missing Values")
+p5
+
+```
+
+We can see there are no general trends visible in the time series plots. ATM transactions are neither increasing nor decreasing over time. 
+
+Next we look for weekly seasonality, which we expect for ATM transactions. (We don't need to check ATM3 for this.)
+
+```{r parta_12}
+p6 <- atm_ts |>
+    filter(ATM != "ATM3") |>
+    gg_subseries(Cash, period = "week", aes(color = ATM)) +
+    scale_color_manual(values = atm_colors) +
+    theme(legend.position = "none")
+p6
+
+```
+
+There is weekly seasonality. The middle days of the week generally experience the smallest transaction values, with Thursday being the lowest value transaction day for all ATMs and Wednesday being the second lowest. Friday is the largest value transaction day for ATMs 2 and 4, but Sunday is the largest value transaction day for ATM 1, with Friday being a close second.
+
+Since the data are non-stationary, we will take a seasonal difference. 
+
+```{r parta_13, warning = FALSE, message = FALSE}
+p7 <- atm_ts |>
+    filter(ATM == "ATM1") |>
+    gg_tsdisplay(difference(Cash, lag = 7),
+               plot_type = "partial", lag = 21) +
+    labs(title = "Seasonally differenced", y="")
+p7
+
+```
+
+```{r parta_14, warning = FALSE, message = FALSE}
+p8 <- atm_ts |>
+    filter(ATM == "ATM2") |>
+    gg_tsdisplay(difference(Cash, lag = 7),
+               plot_type = "partial", lag = 21) +
+    labs(title = "Seasonally differenced", y="")
+p8
+
+```
+
+```{r parta_15, warning = FALSE, message = FALSE}
+p9 <- atm_ts |>
+    filter(ATM == "ATM4") |>
+    gg_tsdisplay(difference(Cash, lag = 7),
+               plot_type = "partial", lag = 21) +
+    labs(title = "Seasonally differenced", y="")
+p9
+
+```
+
+For the seasonally differenced data from ATMS 1, 2, and 4, we see significant spikes at lag 7 in the ACF, and no other particularly significant spikes. We also see exponential decay in the seasonal lags of the PACF, suggesting an $ARIMA(0,0,0)(0,1,1)_7$ model. We will fit this model as well as an automatically selected ARIMA model.
+
+```{r parta_16}
+atm1_fit <- atm_ts |>
+    filter(ATM == "ATM1" & DATE <= as.Date("2010-03-31")) |>
+    model(arima000011 = ARIMA(Cash ~ pdq(0,0,0) + PDQ(0,1,1, period = 7)),
+          auto = ARIMA(Cash, stepwise = FALSE, approx = FALSE))
+cols <- c("arima000011", "auto")
+pivot_atm1_fit <- atm1_fit |>
+    pivot_longer(cols = all_of(cols), names_to = "Model Name",
+                 values_to = "Orders")
+knitr::kable(pivot_atm1_fit, format = "simple")
+
+```
+
+The automatically selected model is an $ARIMA(2,0,2)(0,1,2)_7$ model.
+
+```{r parta_17}
+glance_atm1_fit <- glance(atm1_fit) |>
+    arrange(AICc) |>
+    select(.model:BIC)
+knitr::kable(glance_atm1_fit)
+
+```
+
+The automatically selected model has a lower $AIC_c$ than the alternative model we proposed, so we will check the residuals for the automatically selected model.
+
+```{r parta_18}
+p10 <- atm1_fit |>
+    select(auto) |>
+    gg_tsresiduals(lag=21)
+p10
+
+```
+
+The residuals from the automatically selected model are consistent with white noise. We will confirm using a Ljung-Box test.
+
+```{r parta_19}
+dof <- atm1_fit |>
+    select(auto) |>
+    tidy() |>
+    filter(term != "constant") |> 
+    NROW()
+m = 7 #period of seasonality
+l = 2*m #for seasonal data, otherwise l = 10
+augment(atm1_fit) |>
+    filter(.model == "auto") |>
+    features(.innov, ljung_box, lag=l, dof=dof)
+
+```
+
+The large p-value from the test confirms that the residuals are not distinguishable from white noise.
+
+Now we can compare forecasts for April 2010 against the actual values from April 2010, as well as look at forecasts for May 2010. We will not display data prior to March 2010 so that we can zoom in on the accuracy of these predictions.
+
+```{r parta_20}
+atm_ts_since_march_2010 <- atm_ts |>
+    filter(DATE >= as.Date("2010-03-01"))
+p11 <- atm1_fit |>
+    forecast(h=61) |>
+    filter(.model == "auto") |>
+    autoplot(atm_ts_since_march_2010 |> filter(ATM == "ATM1")) +
+    labs(title = "ATM1 Cash Transaction Forecasts",
+         y="Cash (Hundreds of $)")
+p11
+
+```
+
+The forecasts from the automatically selected model capture the typical midweek dips and end of week peaks very well. So we can anticipate our May 2010 forecasts being reliable estimates of ATM transactions for ATM1.
+
+We repeat the process for ATMs 2 and 4. 
+
+```{r parta_21}
+atm2_fit <- atm_ts |>
+    filter(ATM == "ATM2" & DATE <= as.Date("2010-03-31")) |>
+    model(arima000011 = ARIMA(Cash ~ pdq(0,0,0) + PDQ(0,1,1, period = 7)),
+          auto = ARIMA(Cash, stepwise = FALSE, approx = FALSE))
+pivot_atm2_fit <- atm2_fit |>
+    pivot_longer(cols = all_of(cols), names_to = "Model Name",
+                 values_to = "Orders")
+knitr::kable(pivot_atm2_fit, format = "simple")
+
+```
+
+The automatically selected model for ATM2 is an $ARIMA(2,0,2)(0,1,1)$ model with drift.
+
+```{r parta_22}
+drift <- atm2_fit |>
+    select(auto) |>
+    tidy() |>
+    filter(term == "constant") |> 
+    select(estimate) |>
+    as.numeric()
+drift <- round(drift, 2)
+
+```
+
+The drift term is `r drift`, indicating a decreasing trend over time that we did not pick up on initially. Looking back at the time series plots, it is clear that ATM2 has smaller peaks at the end of its time series plot than at the beginning. 
+
+```{r parta_23}
+glance_atm2_fit <- glance(atm2_fit) |>
+    arrange(AICc) |>
+    select(.model:BIC)
+knitr::kable(glance_atm2_fit)
+
+```
+
+The automatically selected model has a lower $AIC_c$ than the alternative model we proposed, so we will check the residuals for the automatically selected model.
+
+```{r parta_24}
+p12 <- atm2_fit |>
+    select(auto) |>
+    gg_tsresiduals(lag=21)
+p12
+
+```
+
+One small spike at lag 5 is still consistent with white noise. We will confirm using a Ljung-Box test.
+
+```{r parta_25}
+dof <- atm2_fit |>
+    select(auto) |>
+    tidy() |>
+    filter(term != "constant") |> 
+    NROW()
+m = 7 #period of seasonality
+l = 2*m #for seasonal data, otherwise l = 10
+augment(atm2_fit) |>
+    filter(.model == "auto") |>
+    features(.innov, ljung_box, lag=l, dof=dof)
+
+```
+
+The large p-value from the test confirms that the residuals are not distinguishable from white noise.
+
+Now we can forecast.
+
+```{r parta_26}
+p13 <- atm2_fit |>
+    forecast(h=61) |>
+    filter(.model == "auto") |>
+    autoplot(atm_ts_since_march_2010 |> filter(ATM == "ATM2")) +
+    labs(title = "ATM2 Cash Transaction Forecasts",
+         y="Cash (Hundreds of $)")
+p13
+
+```
+
+The forecasts from the automatically selected model look reasonable for ATM2. We proceed with ATM4, noting that in order for the $ARIMA(0,0,0)(0,1,1)$ model we've been proposing for all ATMs to be stable for ATM4, a drift constant has to be added.
+
+```{r parta_27}
+atm4_fit <- atm_ts |>
+    filter(ATM == "ATM4" & DATE <= as.Date("2010-03-31")) |>
+    model(arima000011drift = ARIMA(Cash ~ 1 + pdq(0,0,0) + PDQ(0,1,1,
+                                                               period = 7)),
+          auto = ARIMA(Cash, stepwise = FALSE, approx = FALSE))
+cols <- c("arima000011drift", "auto")
+pivot_atm4_fit <- atm4_fit |>
+    pivot_longer(cols = all_of(cols), names_to = "Model Name",
+                 values_to = "Orders")
+knitr::kable(pivot_atm4_fit, format = "simple")
+
+```
+
+The automatically selected model for ATM4 is an $ARIMA(0,0,0)(2,0,0)$ model with mean (i.e. intercept).
+
+```{r parta_28}
+intercept <- atm4_fit |>
+    select(auto) |>
+    tidy() |>
+    filter(term == "constant") |> 
+    select(estimate) |>
+    as.numeric()
+intercept <- round(intercept, 2)
+
+```
+
+The intercept term for the automatically selected model is `r intercept`.
+
+```{r parta_29}
+glance_atm4_fit <- glance(atm4_fit) |>
+    arrange(AICc) |>
+    select(.model:BIC)
+knitr::kable(glance_atm4_fit)
+
+```
+
+It's not possible to compare the $AIC_c$ values of these two models, as they have different orders of differencing $d$. ATM4 is the first ATM for which the automatically selected model did not include one level of seasonal differencing. We know from exploring the data previously that this level of differencing is needed, so we will reject the automatically selected model on that basis.
+
+Next, we will see if the automatically selected models for the previous two ATMs perform better for ATM4 than the $ARIMA(0,0,0)(0,1,1)$ model we proposed for all of them. Then we can choose the model among those with the lowest $AIC_c$ value. All models require a drift term.
+
+```{r parta_30}
+atm4_fit <- atm_ts |>
+    filter(ATM == "ATM4" & DATE <= as.Date("2010-03-31")) |>
+    model(arima000011drift = ARIMA(Cash ~ 1 + pdq(0,0,0) + PDQ(0,1,1,
+                                                               period = 7)),
+          arima202012drift = ARIMA(Cash ~ 1 + pdq(2,0,2) + PDQ(0,1,2, period = 7)),
+          arima202011drift = ARIMA(Cash ~ 1 + pdq(2,0,2) + PDQ(0,1,1,
+                                                               period = 7)))
+cols <- c("arima000011drift", "arima202012drift", "arima202011drift")
+pivot_atm4_fit <- atm4_fit |>
+    pivot_longer(cols = all_of(cols), names_to = "Model Name",
+                 values_to = "Orders")
+knitr::kable(pivot_atm4_fit, format = "simple")
+
+```
+
+```{r parta_31}
+glance_atm4_fit <- glance(atm4_fit) |>
+    arrange(AICc) |>
+    select(.model:BIC)
+knitr::kable(glance_atm4_fit)
+
+```
+
+The $ARIMA(0,0,0)(0,1,1)$ model we proposed has the lowest $AIC_c$ value.
+
+```{r parta_32}
+drift <- atm4_fit |>
+    select(arima000011drift) |>
+    tidy() |>
+    filter(term == "constant") |> 
+    select(estimate) |>
+    as.numeric()
+drift <- round(drift, 2)
+
+```
+
+Its drift term is `r drift`.
+
+```{r parta_33}
+p14 <- atm4_fit |>
+    select(arima000011drift) |>
+    gg_tsresiduals(lag=21)
+p14
+
+```
+
+The residuals look like white noise. We will confirm with a Ljung-Box test. 
+
+```{r parta_34}
+dof <- atm4_fit |>
+    select(arima000011drift) |>
+    tidy() |>
+    filter(term != "constant") |> 
+    NROW()
+m = 7 #period of seasonality
+l = 2*m #for seasonal data, otherwise l = 10
+augment(atm4_fit) |>
+    filter(.model == "arima000011drift") |>
+    features(.innov, ljung_box, lag=l, dof=dof)
+
+```
+The large p-value from the test confirms that the residuals are not distinguishable from white noise.
+
+Now we can forecast.
+
+```{r parta_35}
+p15 <- atm4_fit |>
+    forecast(h=61) |>
+    filter(.model == "arima000011drift") |>
+    autoplot(atm_ts_since_march_2010 |> filter(ATM == "ATM4")) +
+    labs(title = "ATM4 Cash Transaction Forecasts",
+         y="Cash (Hundreds of $)")
+p15
+
+```
+
+These April 2010 forecasts vs. actual values aren't as close as those for ATMs 1 or 2. So it's possible the May 2010 forecasts for ATM4 are the least reliable of the three.
+
 ## Part B:
 
+### Data Preparation:
+
+```{r partb_1}
+my_url2 <- "https://github.com/geedoubledee/data624_project1/raw/main/ResidentialCustomerForecastLoad-624.xlsx"
+col_types <- c("numeric", "text", "numeric")
+col_names <- c("CaseSeq", "Month", "KWH")
+temp <- tempfile(fileext = ".xlsx")
+req <- GET(my_url2, authenticate(Sys.getenv("GITHUB_PAT"), ""),
+           write_disk(path = temp))
+res_power <- readxl::read_excel(temp, col_types = col_types)
+colnames(res_power) <- col_names
+res_power <- res_power |>
+    select(-CaseSeq) |>
+    mutate(Month = yearmonth(Month))
+res_power_ts <- res_power |>
+    as_tsibble(index = Month)
+res_power_ts |>
+    autoplot()
+
+```
+
 ## Part C:
+
+
