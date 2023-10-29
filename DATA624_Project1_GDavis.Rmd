@@ -3,8 +3,8 @@ title: "DATA624 - Project1"
 author: "Glen Dale Davis"
 date: "2023-10-14"
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -21,6 +21,7 @@ library(pracma)
 library(cowplot)
 library(readxl)
 library(httr)
+library(writexl)
 
 ```
 
@@ -70,7 +71,7 @@ p1
 
 ```
 
-```{r part_a4}
+```{r part_a4, warning = FALSE, message = FALSE}
 na_summary <- atm_ts |>
     as_tibble() |>
     filter(is.na(Cash) | Cash == 0) |>
@@ -79,6 +80,8 @@ na_summary <- atm_ts |>
 knitr::kable(na_summary)
 
 ```
+
+### Missing Data and Outliers:
 
 We can immediately see missing value and outlier issues with the data that we will need to address. First, we will handle ATM3's data issues, as those need to be addressed differently from the other ATMs' data issues.
 
@@ -116,7 +119,7 @@ p2a <- atm_ts |>
     theme(legend.position = "top",
           strip.background = element_blank(),
           strip.text.x = element_blank()) +
-    labs(title = "Histograms of Cash per ATM",
+    labs(title = "Histograms of Cash per ATM", x = "Cash (Hundreds of $)",
          y = "Count")
 p2b <- atm_ts |>
     filter(ATM != "ATM3") |>
@@ -182,9 +185,11 @@ p3
 
 There are no longer any data points considered outliers for ATMs 2 and 4 after replacement. ATM1 still contains data points considered outliers on the low end after replacement. This can happen in bimodal distributions, but we have still reduced the weight of all outliers without eliminating them. We will proceed.
 
+### Looking for Trend and Seasonality:
+
 First, we plot the adjusted time series.
 
-```{r part_a11}
+```{r part_a11, warning = FALSE, message = FALSE}
 p5 <- atm_ts |>
     autoplot(Cash) +
     facet_wrap(~ ATM, scales = "free_y" , ncol = 1) +
@@ -244,7 +249,11 @@ p9
 
 ```
 
-For the seasonally differenced data from ATMS 1, 2, and 4, we see significant spikes at lag 7 in the ACF, and no other particularly significant spikes. We also see exponential decay in the seasonal lags of the PACF, suggesting an $ARIMA(0,0,0)(0,1,1)_7$ model. We will fit this model as well as an automatically selected ARIMA model.
+### Modeling/Forecasting:
+
+For the seasonally differenced data from ATMS 1, 2, and 4, we see significant spikes at lag 7 in the ACF, and no other particularly significant spikes. We also see exponential decay in the seasonal lags of the PACF, suggesting an $ARIMA(0,0,0)(0,1,1)_7$ model.
+
+We will fit this model as well as an automatically selected $ARIMA$ model.
 
 ```{r parta_16}
 atm1_fit <- atm_ts |>
@@ -299,7 +308,7 @@ The large p-value from the test confirms that the residuals are not distinguisha
 
 Now we can compare forecasts for April 2010 against the actual values from April 2010, as well as look at forecasts for May 2010. We will not display data prior to March 2010 so that we can zoom in on the accuracy of these predictions.
 
-```{r parta_20}
+```{r parta_20, warning = FALSE, message = FALSE}
 atm_ts_since_march_2010 <- atm_ts |>
     filter(DATE >= as.Date("2010-03-01"))
 p11 <- atm1_fit |>
@@ -312,7 +321,18 @@ p11
 
 ```
 
-The forecasts from the automatically selected model capture the typical midweek dips and end of week peaks very well. So we can anticipate our May 2010 forecasts being reliable estimates of ATM transactions for ATM1.
+The forecasts from the automatically selected model capture the typical midweek dips and end of week peaks very well. So we can anticipate our May 2010 forecasts being reliable estimates of ATM transactions for ATM1. We save the forecasts to an Excel file.
+
+```{r }
+parta_excel_forecasts_atm1 <- atm1_fit |>
+    forecast(h=61) |>
+    filter(.model == "auto" & month(DATE) == 5) |>
+    as_tibble() |>
+    mutate(DATE = as.character(DATE),
+           Cash = as.character(Cash))
+write_xlsx(parta_excel_forecasts_atm1, "parta_excel_forecasts_atm1.xlsx")
+
+```
 
 We repeat the process for ATMs 2 and 4. 
 
@@ -328,7 +348,7 @@ knitr::kable(pivot_atm2_fit, format = "simple")
 
 ```
 
-The automatically selected model for ATM2 is an $ARIMA(2,0,2)(0,1,1)$ model with drift.
+The automatically selected model for ATM2 is an $ARIMA(2,0,2)(0,1,1)_7$ model with drift.
 
 ```{r parta_22}
 drift <- atm2_fit |>
@@ -381,7 +401,7 @@ The large p-value from the test confirms that the residuals are not distinguisha
 
 Now we can forecast.
 
-```{r parta_26}
+```{r parta_26, warning = FALSE, message = FALSE}
 p13 <- atm2_fit |>
     forecast(h=61) |>
     filter(.model == "auto") |>
@@ -392,7 +412,20 @@ p13
 
 ```
 
-The forecasts from the automatically selected model look reasonable for ATM2. We proceed with ATM4, noting that in order for the $ARIMA(0,0,0)(0,1,1)$ model we've been proposing for all ATMs to be stable for ATM4, a drift constant has to be added.
+The forecasts from the automatically selected model look pretty reasonable for ATM2. We save them to an Excel file.
+
+```{r }
+parta_excel_forecasts_atm2 <- atm2_fit |>
+    forecast(h=61) |>
+    filter(.model == "auto" & month(DATE) == 5) |>
+    as_tibble() |>
+    mutate(DATE = as.character(DATE),
+           Cash = as.character(Cash))
+write_xlsx(parta_excel_forecasts_atm2, "parta_excel_forecasts_atm2.xlsx")
+
+```
+
+We proceed with ATM4, noting that in order for the $ARIMA(0,0,0)(0,1,1)_7$ model we've been proposing for all ATMs to be stable for ATM4, a drift constant has to be added.
 
 ```{r parta_27}
 atm4_fit <- atm_ts |>
@@ -408,7 +441,7 @@ knitr::kable(pivot_atm4_fit, format = "simple")
 
 ```
 
-The automatically selected model for ATM4 is an $ARIMA(0,0,0)(2,0,0)$ model with mean (i.e. intercept).
+The automatically selected model for ATM4 is an $ARIMA(0,0,0)(2,0,0)_7$ model with mean (i.e. intercept).
 
 ```{r parta_28}
 intercept <- atm4_fit |>
@@ -433,9 +466,9 @@ knitr::kable(glance_atm4_fit)
 
 It's not possible to compare the $AIC_c$ values of these two models, as they have different orders of differencing $d$. ATM4 is the first ATM for which the automatically selected model did not include one level of seasonal differencing. We know from exploring the data previously that this level of differencing is needed, so we will reject the automatically selected model on that basis.
 
-Next, we will see if the automatically selected models for the previous two ATMs perform better for ATM4 than the $ARIMA(0,0,0)(0,1,1)$ model we proposed for all of them. Then we can choose the model among those with the lowest $AIC_c$ value. All models require a drift term.
+Next, we will see if the automatically selected models for the previous two ATMs perform better for ATM4 than the $ARIMA(0,0,0)(0,1,1)_7$ model we proposed for all of them. Then we can choose the model among those with the lowest $AIC_c$ value. All models require a drift term.
 
-```{r parta_30}
+```{r parta_30, warning = FALSE, message = FALSE}
 atm4_fit <- atm_ts |>
     filter(ATM == "ATM4" & DATE <= as.Date("2010-03-31")) |>
     model(arima000011drift = ARIMA(Cash ~ 1 + pdq(0,0,0) + PDQ(0,1,1,
@@ -459,7 +492,7 @@ knitr::kable(glance_atm4_fit)
 
 ```
 
-The $ARIMA(0,0,0)(0,1,1)$ model we proposed has the lowest $AIC_c$ value.
+The $ARIMA(0,0,0)(0,1,1)_7$ model we proposed has the lowest $AIC_c$ value.
 
 ```{r parta_32}
 drift <- atm4_fit |>
@@ -501,7 +534,7 @@ The large p-value from the test confirms that the residuals are not distinguisha
 
 Now we can forecast.
 
-```{r parta_35}
+```{r parta_35, warning = FALSE, message = FALSE}
 p15 <- atm4_fit |>
     forecast(h=61) |>
     filter(.model == "arima000011drift") |>
@@ -512,11 +545,119 @@ p15
 
 ```
 
-These April 2010 forecasts vs. actual values aren't as close as those for ATMs 1 or 2. So it's possible the May 2010 forecasts for ATM4 are the least reliable of the three.
+These April 2010 forecasts vs. actual values aren't as close as those for ATMs 1 or 2. So it's possible the May 2010 forecasts for ATM4 are the least reliable of the three. It's worth noting that the $80\%$ prediction intervals do a good job of capturing what the point forecasts do not though.
+
+We consider whether transforming the data for ATM4 would improve our forecasting ability.
+
+```{r parta_36}
+lambda <- atm_ts |>
+    filter(ATM == "ATM4") |>
+    features(Cash, features = guerrero) |>
+    pull(lambda_guerrero)
+lambda <- round(lambda, 2)
+
+```
+
+With a proposed lambda of `r lambda`, a square root transformation of the Cash data for ATM4 is reasonable. We refit the model we originally proposed on the transformed data, and we also fit a new automatically selected model.
+
+```{r parta_37}
+atm4_fit <- atm_ts |>
+    filter(ATM == "ATM4" & DATE <= as.Date("2010-03-31")) |>
+    model(arima000011drift = ARIMA(sqrt(Cash) ~ 1 + pdq(0,0,0) + PDQ(0,1,1,
+                                                               period = 7)),
+          auto = ARIMA(sqrt(Cash), stepwise = FALSE, approx = FALSE))
+cols <- c("arima000011drift", "auto")
+pivot_atm4_fit <- atm4_fit |>
+    pivot_longer(cols = all_of(cols), names_to = "Model Name",
+                 values_to = "Orders")
+knitr::kable(pivot_atm4_fit, format = "simple")
+
+```
+
+We can't compare the $AIC_c$ values for the automatically selected model and the original model, as they have different orders of differencing, so we will skip to forecast comparisons.
+
+```{r parta_38, warning = FALSE, message = FALSE}
+palette <- brewer.pal(n = 8, name = "Dark2")
+model_colors <- palette[5:6]
+names(model_colors) <- c("arima000011drift", "auto")
+p16 <- atm4_fit |>
+    forecast(h=61) |>
+    autoplot(atm_ts_since_march_2010 |> filter(ATM == "ATM4"), level = NULL) +
+    labs(title = "ATM4 Cash Transaction Forecasts",
+         y="Cash (Hundreds of $)") +
+    guides(color = guide_legend(title = "Forecast")) +
+    scale_color_manual(values = model_colors)
+p16
+
+```
+
+The automatically selected model does not perform better than the originally proposed model on the transformed data. So we choose the originally proposed model as the superior forecasting model here, replot the forecasts for only this model with prediction intervals, and save the forecasts to an Excel file.
+
+```{r parta_39, warning = FALSE, message = FALSE}
+p17 <- atm4_fit |>
+    forecast(h=61) |>
+    filter(.model == "arima000011drift") |>
+    autoplot(atm_ts_since_march_2010 |> filter(ATM == "ATM4")) +
+    labs(title = "ATM4 Cash Transaction Forecasts",
+         y="Cash (Hundreds of $)")
+p17
+
+parta_excel_forecasts_atm4 <- atm4_fit |>
+    forecast(h=61) |>
+    filter(.model == "arima000011drift" & month(DATE) == 5) |>
+    as_tibble() |>
+    mutate(DATE = as.character(DATE),
+           Cash = as.character(Cash))
+write_xlsx(parta_excel_forecasts_atm4, "parta_excel_forecasts_atm4.xlsx")
+
+```
+
+We return to ATM3, for which we will simply compare forecasts from the MEAN and NAIVE methods.
+
+```{r parta_40, warning = FALSE, message = FALSE}
+atm3_fit <- atm_ts |>
+    filter(ATM == "ATM3") |>
+    model(mean = MEAN(Cash),
+          naive = NAIVE(Cash))
+names(model_colors) <- c("mean", "naive")
+p18 <- atm3_fit |>
+    forecast(h=31) |>
+    autoplot(atm_ts_since_march_2010 |> filter(ATM == "ATM3"), level = NULL) +
+    labs(title = "ATM3 Cash Transaction Forecasts",
+         y="Cash (Hundreds of $)") +
+    guides(color = guide_legend(title = "Forecast")) +
+    scale_color_manual(values = model_colors)
+p18
+
+```
+
+We favor the NAIVE method here because we imputed most of the data for ATM3, and its mean is therefore quite fabricated. Using the most recent observation as the predicted value for all future observations is reasonable until more data can be collected for this ATM. We replot only the forecasts from the NAIVE method with prediction intervals and save the forecasts to an Excel file.
+
+```{r parta_41, warning = FALSE, message = FALSE}
+p19 <- atm3_fit |>
+    forecast(h=31) |>
+    filter(.model == "naive") |>
+    autoplot(atm_ts_since_march_2010 |> filter(ATM == "ATM3")) +
+    labs(title = "ATM3 Cash Transaction Forecasts",
+         subtitle = "NAIVE Method",
+         y="Cash (Hundreds of $)")
+p19
+
+parta_excel_forecasts_atm3 <- atm3_fit |>
+    forecast(h=31) |>
+    filter(.model == "naive") |>
+    as_tibble() |>
+    mutate(DATE = as.character(DATE),
+           Cash = as.character(Cash))
+write_xlsx(parta_excel_forecasts_atm3, "parta_excel_forecasts_atm3.xlsx")
+
+```
 
 ## Part B:
 
 ### Data Preparation:
+
+We load data on residential power usage from January 1998 until December 2013.
 
 ```{r partb_1}
 my_url2 <- "https://github.com/geedoubledee/data624_project1/raw/main/ResidentialCustomerForecastLoad-624.xlsx"
@@ -527,16 +668,465 @@ req <- GET(my_url2, authenticate(Sys.getenv("GITHUB_PAT"), ""),
            write_disk(path = temp))
 res_power <- readxl::read_excel(temp, col_types = col_types)
 colnames(res_power) <- col_names
+
+```
+
+We remove the unnecessary `CaseSequence` variable, coerce the `Month` variable to class *yearmonth*, and rescale Kilowatt hours as millions of Kilowatt hours. We create and plot the time series. 
+
+```{r partb_2}
 res_power <- res_power |>
     select(-CaseSeq) |>
-    mutate(Month = yearmonth(Month))
+    mutate(Month = yearmonth(Month),
+           KWH_Mil = KWH / 1000000)
 res_power_ts <- res_power |>
     as_tsibble(index = Month)
 res_power_ts |>
-    autoplot()
+    autoplot(KWH_Mil) +
+    labs(title = "Residential Power Usage in Millions of Kilowatt Hours",
+         y = "Kilowatt Hours (Millions)")
+
+```
+
+### Missing Data and Outliers:
+
+We can already see an outlier, and we print a summary of $0$ or `NA` values.
+
+```{r partb_3}
+na_summary <- res_power_ts |>
+    select(-KWH) |>
+    as_tibble() |>
+    filter(is.na(KWH_Mil) | KWH_Mil == 0)
+knitr::kable(na_summary)
+
+```
+
+There is one missing value for September 2008 that we will have to deal with. We check further for outliers.
+
+```{r partb_4, warning = FALSE, message = FALSE}
+p20a <- res_power_ts |>
+    filter(!is.na(KWH_Mil)) |>
+    ggplot(aes(x = KWH_Mil)) +
+    geom_histogram(binwidth = 1) + 
+    scale_x_continuous(limits = c(0, 11), breaks = seq(0, 12, 2)) +
+    labs(title = "Histogram of Millions of Kilowatt Hours Used",
+         x = "Kilowatt Hours (Millions)",
+         y = "Count")
+p20b <- res_power_ts |>
+    filter(!is.na(KWH_Mil)) |>
+    ggplot(aes(x = KWH_Mil)) + 
+    geom_boxplot() +
+    scale_x_continuous(limits = c(0, 11), breaks = seq(0, 12, 2)) +
+    theme(axis.text.y = element_blank(),
+          axis.ticks.y = element_blank()) +
+    labs(title = "Boxplot of Millions of Kilowatt Hours Used",
+         x = "Kilowatt Hours (Millions)")
+#Restructure required if more than 1 outlier or if tie values in KWH_Mil
+out <- ggplot_build(p20b)[["data"]][[1]][["outliers"]]
+row <- res_power_ts[which(res_power_ts$KWH_Mil == out[1]), ]
+month <- as.character(row$Month)
+names(out) <- month
+tidyout <- purrr::map_df(out, tibble::as_tibble, .id = "month")
+p20b <- p20b +
+    geom_text(data = tidyout,
+              aes(x = value, y = 0, label = month),
+              hjust = -0.1,
+              vjust = -0.6) +
+    theme(axis.title.y = element_blank())
+p20 <- plot_grid(p20a, p20b, ncol = 1, align = "v", axis = "l")
+p20
+
+```
+
+The one extreme outlier we will have to deal with is for July 2010.
+
+We will set the outlier value for July 2010 to `NA` and replace this and the `NA` value for September 2008 via Last Observation Carried Forward (LOCF) imputation. This will reduce the weight these observations would have had on the models we create. (We considered winsorizing the data, but using that method with either a k of 1 or 5 would not be preferable here. A k of 5 would consider too many reasonable values outliers, and a k of 1 would still result in what are probably underestimates for September 2008 and July 2010.)
+
+```{r partb_5}
+res_power_ts_na <- res_power_ts |>
+    filter(KWH_Mil == out[1]) |>
+    mutate(KWH = NA,
+           KWH_Mil = NA)
+res_power_ts <- res_power_ts|>
+    filter(is.na(KWH_Mil) | KWH_Mil != out[1]) |>
+    bind_rows(res_power_ts_na)
+res_power_ts <- res_power_ts |>
+    fill(KWH_Mil, .direction = "down")
+
+```
+
+We now plot the adjusted time series.
+
+```{r partb_6}
+p21 <- res_power_ts |>
+    autoplot(KWH_Mil) +
+    labs(title = "Residential Power Usage in Millions of Kilowatt Hours",
+         subtitle = "Adjusted for Missing Values & Outliers",
+         y = "Kilowatt Hours (Millions)")
+p21
+
+```
+
+### Looking for Trend and Seasonality:
+
+There is an upward trend apparent in the data as well as seasonality. We take a closer look at the seasonal patterns.
+
+```{r partb_7}
+palette <- scales::viridis_pal(option = "magma", direction = -1)(9)
+p22 <- res_power_ts |>
+    gg_season(KWH_Mil, period = "year", pal = palette) +
+    labs(title = "Annual Residential Power Usage in Millions of Kilowatt Hours",
+         y = "Kilowatt Hours (Millions)")
+p22
+
+```
+
+There is yearly seasonality. Residential power usage usually peaks in August and January, while usage is generally lowest in May and November. 
+
+Since the data are non-stationary, we will take a seasonal difference. 
+
+```{r partb_8, warning = FALSE, message = FALSE}
+p23 <- res_power_ts |>
+    gg_tsdisplay(difference(KWH_Mil, lag = 12),
+               plot_type = "partial", lag = 36) +
+    labs(title = "Seasonally differenced", y="")
+p23
+
+```
+
+### Modeling/Forecasting:
+
+The significant spike at lag 1 in the ACF suggests a non-seasonal MA(1) component. The significant spike at lag 12 in the ACF suggests a seasonal MA(1) component. We will propose an $ARIMA(0,0,1)(0,1,1)_{12}$ model with drift and compare it to a stepwise selected $ARIMA$ model, as well as two Holt-Winters' seasonality models: one additive and one multiplicative.
+
+```{r partb_9}
+res_power_fit <- res_power_ts |>
+    filter(year(Month) <= 2012) |>
+    model(arima001011drift = ARIMA(KWH_Mil ~ 1 + pdq(0,0,1) + PDQ(0,1,1,
+                                                                  period = 12)),
+          stepwise = ARIMA(KWH_Mil),
+          holt_wint_add = ETS(KWH_Mil ~ error("A") + trend("A") + season("A")),
+          holt_wint_mult = ETS(KWH_Mil ~ error("M") + trend("A") + season("M")))
+cols <- c("arima001011drift", "stepwise", "holt_wint_add", "holt_wint_mult")
+pivot_res_power_fit <- res_power_fit |>
+    pivot_longer(cols = all_of(cols), names_to = "Model Name",
+                 values_to = "Orders")
+knitr::kable(pivot_res_power_fit, format = "simple")
+
+```
+
+```{r partb_10}
+drift1 <- res_power_fit |>
+    select(arima001011drift) |>
+    tidy() |>
+    filter(term == "constant") |> 
+    select(estimate) |>
+    as.numeric()
+drift1 <- round(drift1, 2)
+drift2 <- res_power_fit |>
+    select(stepwise) |>
+    tidy() |>
+    filter(term == "constant") |> 
+    select(estimate) |>
+    as.numeric()
+drift2 <- round(drift2, 2)
+
+```
+
+The drift term for the $ARIMA$ model we proposed is `r drift1`, while the drift term for the stepwise selected $ARIMA$ model is larger at `r drift2`. Both reflect the general upward trend we noted earlier.
+
+```{r partb_11}
+exclude <- c("holt_wint_add", "holt_wint_mult")
+glance_res_power_fit <- glance(res_power_fit) |>
+    arrange(AICc) |>
+    select(.model:BIC) |>
+    filter(!.model %in% exclude)
+knitr::kable(glance_res_power_fit)
+
+```
+
+Between the $ARIMA$ model we proposed and the stepwise selected $ARIMA$ model, the model we proposed has slightly lower $AIC_c$. We have excluded the Holt-Winters' additive/multiplicative seasonality models from an $AIC_c$ comparison because $ARIMA$ and $ETS$ models cannot be directly compared that way. We will instead compare the residual diagnostic plots and the forecast performance of the $ARIMA$ model we proposed and the Holt-Winters' models. 
+
+First we look at residual diagnostic plots for the $ARIMA$ model.
+
+```{r partb_12}
+p24 <- res_power_fit |>
+    select(arima001011drift) |>
+    gg_tsresiduals(lag=36)
+p24
+
+```
+
+One small spike outside the bounds of the ACF plot is still consistent with white noise, so the $ARIMA$ model appears to capture all the dynamics in the data pretty well.
+
+Next we look at residual diagnostic plots for the $ETS$ models.
+
+```{r }
+p25 <- res_power_fit |>
+    select(holt_wint_add) |>
+    gg_tsresiduals(lag=36)
+p25
+
+```
+
+With one large spike outside the bounds of the ACF plot as well as some additional small spikes, the additive Holt-Winters' model doesn't appear to capture the data dynamics as well as the $ARIMA$ model.
+
+```{r partb_13}
+p26 <- res_power_fit |>
+    select(holt_wint_mult) |>
+    gg_tsresiduals(lag=36)
+p26 
+
+```
+
+The multiplicative Holt-Winters' model doesn't appear to capture the data dynamics any better.
+
+Let's confirm whether the Ljung-Box tests indicate the residuals for the $ARIMA$ model are indistinguishable from white noise, but the residuals for both $ETS$ models are not.
+
+```{r partb_14}
+dof <- res_power_fit |>
+    select(arima001011drift) |>
+    tidy() |>
+    filter(term != "constant") |> 
+    NROW()
+m = 12 #period of seasonality
+l = 2*m #for seasonal data, otherwise l = 10
+augment(res_power_fit) |>
+    filter(.model == "arima001011drift") |>
+    features(.innov, ljung_box, lag=l, dof=dof)
+
+```
+
+The large p-value for the $ARIMA$ model's tests indicates the residuals from the $ARIMA$ model are in fact indistinguishable from white noise.
+
+```{r partb_15}
+augment(res_power_fit) |>
+    filter(.model %in% exclude) |>
+    features(.innov, ljung_box, lag=l)
+
+```
+
+The small p-values for the $ETS$ models' tests indicate there is information in the data not being captured by these models, as we suspected.
+
+Now we can compare forecasts.
+
+```{r partb_16}
+accuracy <- res_power_fit |>
+    select(-stepwise)
+accuracy <- bind_rows(accuracy |> accuracy(),
+                      accuracy |> forecast(h = 12) |> accuracy(res_power_ts)) |>
+    select(-ME, -MPE, -ACF1)
+knitr::kable(accuracy)
+
+```
+
+The $ARIMA$ model is slightly more accurate based on the test set RMSE, MAPE and MASE. We will visually compare the forecasts for all three models even though we already have good evidence to choose the $ARIMA$ model for forecasting.
+
+```{r partb_17}
+palette <- brewer.pal(n = 8, name = "Dark2")
+model_colors <- palette[5:7]
+names(model_colors) <- c("arima001011drift", "holt_wint_add", "holt_wint_mult")
+res_power_ts_since_2012 <- res_power_ts |>
+    filter(year(Month) >= 2012)
+p27 <- res_power_fit |>
+    forecast(h=24) |>
+    filter(.model != "stepwise") |>
+    autoplot(res_power_ts_since_2012, level = NULL) +
+    labs(title = "Residential Power Usage Forecasts",
+         subtitle = "ARIMA & ETS Models",
+         y="Kilowatt Hours (Millions) ") +
+    guides(color = guide_legend(title = "Forecast")) +
+    scale_color_manual(values = model_colors)
+p27
+
+```
+
+Looking at 2013 forecasts from the three different models vs. the actual values recorded for 2013, the models actually perform pretty similarly. They all get close to the data, and different models make closer predictions at different points. However, we know that the $ARIMA$ model makes the closest predictions overall and captures the dynamics in the data the best, so we choose it as the superior forecasting model here, replot the forecasts for only this model with prediction intervals, and save the forecasts to an Excel file.
+
+```{r parb_18}
+p28 <- res_power_fit |>
+    forecast(h=24) |>
+    filter(.model == "arima001011drift") |>
+    autoplot(res_power_ts_since_2012) +
+    labs(title = "Residential Power Usage Forecasts",
+         subtitle = "ARIMA(0,0,1)(0,1,1) with Drift",
+         y="Kilowatt Hours (Millions)")
+p28
+
+partb_excel_forecasts <- res_power_fit |>
+    forecast(h=24) |>
+    filter(.model == "arima001011drift" & year(Month) == 2014) |>
+    as_tibble() |>
+    mutate(Month = as.character(Month),
+           KWH_Mil = as.character(KWH_Mil))
+write_xlsx(partb_excel_forecasts, "partb_excel_forecasts.xlsx")
 
 ```
 
 ## Part C:
 
+### Data Preparation:
 
+We load data on waterflow for two pipes.
+
+```{r partc_1, warning = FALSE, message = FALSE}
+my_url3 <- "https://github.com/geedoubledee/data624_project1/raw/main/Waterflow_Pipe1.xlsx"
+my_url4 <- "https://github.com/geedoubledee/data624_project1/raw/main/Waterflow_Pipe2.xlsx"
+col_types <- c("date", "numeric")
+col_names <- c("DateTime", "WaterFlow")
+temp <- tempfile(fileext = ".xlsx")
+req <- GET(my_url3, authenticate(Sys.getenv("GITHUB_PAT"), ""),
+           write_disk(path = temp))
+pipe1 <- readxl::read_excel(temp, col_types = col_types)
+temp <- tempfile(fileext = ".xlsx")
+req <- GET(my_url4, authenticate(Sys.getenv("GITHUB_PAT"), ""),
+           write_disk(path = temp))
+pipe2 <- readxl::read_excel(temp, col_types = col_types)
+colnames(pipe1) <- col_names
+colnames(pipe2) <- col_names
+
+```
+
+The data for Pipe1 need to be reduced to the hour level of precision, then aggregated and summarized to get the mean value per hour.
+
+```{r partc_2}
+pipe1 <- pipe1 |>
+    mutate(DateTime = floor_date(DateTime, "hour")) |>
+    group_by(DateTime) |>
+    summarize(WaterFlow = mean(WaterFlow))
+
+```
+
+Now we can create and plot time series for Pipes 1 and 2 alongside their ACF plots to determine if the data are stationary.
+
+### Missing Data and Outliers:
+
+There are some gaps in the time series for Pipe1, so we will create NA observations for those gaps and fill them using Last Observation Carried Forward (LOCF).
+
+```{r partc_3}
+pipe1_ts <- pipe1 |>
+    as_tsibble(index = DateTime) |>
+    fill_gaps() |>
+    fill(WaterFlow, .direction = "down")
+pipe2_ts <- pipe2 |>
+    as_tsibble(index = DateTime)
+p29a <- pipe1_ts |>
+    autoplot(WaterFlow) +
+    labs(title = "Pipe1")
+p30a <- pipe2_ts |>
+    autoplot(WaterFlow) +
+    labs(title = "Pipe2")
+p29b <- pipe1_ts |>
+    ACF(WaterFlow, lag_max = 24) |>
+    autoplot() +
+    labs(subtitle = "Pipe1")
+p30b <- pipe2_ts |>
+    ACF(WaterFlow, lag_max = 168) |>
+    autoplot() +
+    labs(subtitle = "Pipe2")
+p29 <- plot_grid(p29a, p29b, ncol = 1, align = "v", axis = "l")
+p30 <- plot_grid(p30a, p30b, ncol = 1, align = "v", axis = "l")
+p29
+
+```
+
+The hourly data for Pipe1 do appear stationary. There's no daily seasonality. We don't have enough data for Pipe1 to see if there are weekly rather than daily patterns, but we do have enough data to see if there are weekly patterns for Pipe2.
+
+```{r partc_4}
+p30
+
+```
+
+There don't appear to be weekly patterns in the data for Pipe2. There is some autocorrelation at r24, but it is not the largest spike in the ACF. So there may be a seasonal MA(1) component for Pipe 2, or there may not be. 
+
+### Modeling/Forecasting:
+
+We will fit a white noise $ARIMA(0,0,0)$ model with mean and a stepwise selected $ARIMA$ model for comparison for Pipe1.
+
+```{r partc_5}
+pipe1_fit <- pipe1_ts |>
+    filter(month(DateTime) <= 10) |>
+    model(whitenoise = ARIMA(WaterFlow ~ 1 + pdq(0,0,0)),
+          stepwise = ARIMA(WaterFlow))
+cols <- c("whitenoise", "stepwise")
+pivot_pipe1_fit <- pipe1_fit |>
+    pivot_longer(cols = all_of(cols), names_to = "Model Name",
+                 values_to = "Orders")
+knitr::kable(pivot_pipe1_fit, format = "simple")
+
+```
+
+The stepwise model selected for Pipe1 matches our white noise model with mean.
+
+We will fit a white noise $ARIMA(0,0,0)(0,0,0)_{24}$ model with mean and a stepwise selected $ARIMA$ model for comparison for Pipe2. 
+
+```{r partc_6}
+pipe2_fit <- pipe2_ts |>
+    filter(month(DateTime) <= 11) |>
+    model(whitenoise = ARIMA(WaterFlow ~ 1 + pdq(0,0,0) + PDQ(0, 0, 0,
+                                                              period = 24)),
+          stepwise = ARIMA(WaterFlow))
+cols <- c("whitenoise", "stepwise")
+pivot_pipe2_fit <- pipe2_fit |>
+    pivot_longer(cols = all_of(cols), names_to = "Model Name",
+                 values_to = "Orders")
+knitr::kable(pivot_pipe2_fit, format = "simple")
+
+```
+
+The stepwise selected $ARIMA$ model for Pipe2 picks up on the seasonal MA(1) component we weren't certain about and adds a nonseasonal AR(1) component. We compare $AIC_c$ scores.
+
+```{r partc_7}
+glance_pipe2_fit <- glance(pipe2_fit) |>
+    arrange(AICc) |>
+    select(.model:BIC)
+knitr::kable(glance_pipe2_fit)
+
+```
+
+The stepwise selected model has a slightly better $AIC_c$ score, so it's better than the white noise model that assumes no autocorrelation. We forecast for Pipe1 using the white noise model and for Pipe2 using the stepwise model.
+
+```{r partc_8}
+p31 <- pipe1_fit |>
+    forecast(h=192) |>
+    filter(.model == "whitenoise") |>
+    autoplot(pipe1_ts) +
+    labs(title = "Pipe1 Water Flow Forecasts",
+         y="Water Flow")
+p31
+
+```
+
+The forecasts for Pipe1 are equivalent to using a MEAN model.
+
+```{r partc_9}
+p32 <- pipe2_fit |>
+    forecast(h=240) |>
+    filter(.model == "stepwise") |>
+    autoplot(pipe2_ts) +
+    labs(title = "Pipe2 Water Flow Forecasts",
+         y="Water Flow")
+p32
+
+```
+
+The forecasts for Pipe2 approach the mean very quickly despite being more complex for earlier forecasts. It even happens so quickly that the forecasts have reached the mean before the end of the training data. 
+
+Both forecasts are reasonable. We save them to separate Excel files.
+
+```{r partc_10}
+partc_excel_forecasts_pipe1 <- pipe1_fit |>
+    forecast(h=192) |>
+    filter(.model == "whitenoise" & as.Date(DateTime) > as.Date("2015-11-01")) |>
+    as_tibble() |>
+    mutate(DateTime = as.character(DateTime),
+           WaterFlow = as.character(WaterFlow))
+write_xlsx(partc_excel_forecasts_pipe1, "partc_excel_forecasts_pipe1.xlsx")
+
+partc_excel_forecasts_pipe2 <- pipe2_fit |>
+    forecast(h=240) |>
+    filter(.model == "stepwise" & as.Date(DateTime) > as.Date("2015-12-03")) |>
+    as_tibble() |>
+    mutate(DateTime = as.character(DateTime),
+           WaterFlow = as.character(WaterFlow))
+write_xlsx(partc_excel_forecasts_pipe2, "partc_excel_forecasts_pipe2.xlsx")
+
+```
